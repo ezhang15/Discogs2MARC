@@ -51,10 +51,12 @@ def get_discogs_data(release_id, user_token: str):
     except HTTPError as e:
         raise RuntimeError(f"Discogs API error: {e}")
 
-    title = release.title
-    artist = ", ".join([artist.name for artist in release.artists])
-    publisher_number = release.labels[0].catno if release.labels else "N/A"
     full_json = release.data
+    title = full_json.get("title", "")
+    artists = full_json.get("artists", [])
+    artist = ", ".join(a.get("name") for a in artists if "name" in a)
+    labels = full_json.get("labels", [])
+    publisher_number = labels[0].get("catno", "N/A") if labels else "N/A"
 
     # Create a dictionary with the parsed data
     release_dict = {
@@ -144,11 +146,13 @@ def create_base_record() -> Record:
     return record
 
 
+
 def add_discogs_data(base_record: Record, data: dict) -> Record:
     """Add metadata from a Discogs release to a MARC record. Discogs data dict
     must be in the format returned by the DiscogsClient.parse_data method."""
+    full = data["full_json"]
     # Dates (008/07-10) - release year
-    year = str(data["full_json"]["year"])  # make a string for later concatenation
+    year = str(full["year"])  # make a string for later concatenation
     # Discogs year is "0" when unknown; leave base_record's default.
     # Also be sure provided year is 4 characters.
     if year != "0" and len(year) == 4:
@@ -162,9 +166,9 @@ def add_discogs_data(base_record: Record, data: dict) -> Record:
 
     # 024 8# $a IDENTIFIERS\VALUE (only for type: Barcode)
     # If no barcode element, do not include field.
-    if "identifiers" in data["full_json"]:
+    if "identifiers" in full:
         barcodes = set()
-        for identifier in data["full_json"]["identifiers"]:
+        for identifier in full["identifiers"]:
             # include only barcode values without description: Text.
             if (
                 identifier.get("type") == "Barcode"
@@ -182,18 +186,18 @@ def add_discogs_data(base_record: Record, data: dict) -> Record:
 
     # 028 12 $a IDENTIFIERS\VALUE (only for type: Matrix / Runout)
     # If no matrix element, do not include field.
-    if "identifiers" in data["full_json"]:
-        if "labels" in data["full_json"]:
-            label = data["full_json"]["labels"][0]
+    if "identifiers" in full:
+        if "labels" in full:
+            label = full["labels"][0]
             if "name" in label:
                 publisher = label["name"]
             else:
                 publisher = "[publisher not identified]"
         else:
             publisher = "[publisher not identified]"
-
+        
         matrices = set()
-        for identifier in data["full_json"]["identifiers"]:
+        for identifier in full["identifiers"]:
             if (
                 identifier.get("type") == "Matrix / Runout"
                 and identifier.get("value")
@@ -209,16 +213,16 @@ def add_discogs_data(base_record: Record, data: dict) -> Record:
 
     # 028 02 $a LABELS\CATNO $b LABELS\NAME
     # If no labels\catno element, do not include field.
-    if "labels" in data["full_json"]:
+    if "labels" in full:
         # Collect values (catno and name) via dict to de-dup.
         labels = {}
-        for label in data["full_json"]["labels"]:
+        for label in full["labels"]:
             # If there are multiple labels\catno elements, create multiple 028 fields.
             # If no labels\name element, do not include $b.
             # Same catno ($a) + different name ($b) is OK, but remove full duplicates.
             catno = label.get("catno")
             name = label.get("name")
-            normalized_key = normalize(catno + name)
+            normalized_key = normalize(catno + (name or ""))
             # Preserve the first occurrence of a key, so add only if not already present.
             if normalized_key not in labels:
                 labels[normalized_key] = (catno, name)
@@ -261,12 +265,12 @@ def add_discogs_data(base_record: Record, data: dict) -> Record:
     # If no label-info\label\name element, fill in $b with “[publisher not identified]”
     # If there are multiple label-info\label\name elements, take only the first instance.
     # If no date element, fill in $c with “[date of publication not identified]”
-    date_264 = str(data["full_json"]["year"])  # make a string for later concatenation
+    date_264 = str(full["year"])  # make a string for later concatenation
     if date_264 == "0":
         date_264 = "date of publication not identified"
 
-    if "labels" in data["full_json"]:
-        label = data["full_json"]["labels"][0]
+    if "labels" in full:
+        label = full["labels"][0]
         if "name" in label:
             publisher = label["name"]
         else:
@@ -292,9 +296,9 @@ def add_discogs_data(base_record: Record, data: dict) -> Record:
 
     # 505 0# $a TRACKLIST\TITLE -- TRACKLIST\TITLE -- TRACKLIST\TITLE […].
     # If no tracklist element, do not include field.
-    if "tracklist" in data["full_json"]:
+    if "tracklist" in full:
         # Grab all track titles.
-        track_titles = [track["title"].capitalize() for track in data["full_json"]["tracklist"]]
+        track_titles = [track["title"].capitalize() for track in full["tracklist"]]
         # Format into one string, separated by " -- ", ending with period.
         contents = " -- ".join(track_titles) + "."
         subfields_505 = [Subfield("a", contents)]
@@ -303,25 +307,25 @@ def add_discogs_data(base_record: Record, data: dict) -> Record:
 
     # 653 #6 $a GENRES
     # include all genres in $a subfields
-    if "genres" in data["full_json"]:
+    if "genres" in full:
         subfields_653 = []
-        for genre in data["full_json"]["genres"]:
+        for genre in full["genres"]:
             subfields_653.append(Subfield("a", genre))
             field_653 = Field(tag="653", indicators=[" ", "6"], subfields=subfields_653)
         base_record.add_ordered_field(field_653)
 
     # 720 ## $a ARTISTS_SORT.
     # single string fields with possible multiple artists
-    artist_720 = data["full_json"]["artists_sort"]
+    artist_720 = full["artists_sort"]
     # format: $a ARTISTS_SORT.
     subfields_720 = [Subfield("a", artist_720 + ".")]
     field_720 = Field(tag="720", indicators=[" ", " "], subfields=subfields_720)
     base_record.add_ordered_field(field_720)
 
-    # Conditional fields based on format of item. Either vinyl or CD.
-    if "formats" in data["full_json"]:
+    # Conditional fields based on format of item. Either vinyl or CD.    
+    if "formats" in full:
 
-        format_type = data["full_json"]["formats"][0].get("name")
+        format_type = full["formats"][0].get("name")
         # Fields specific to vinyl format
         if format_type == "Vinyl":
 
@@ -330,12 +334,12 @@ def add_discogs_data(base_record: Record, data: dict) -> Record:
             # translated to fixed field:
             base_record.add_ordered_field(Field(tag="007", data="sd\bumennmplnu"))
 
-            qty = data["full_json"]["formats"][0].get("qty", "1")
+            qty = full["formats"][0].get("qty", "1")
             if int(qty) > 1:
                 qty_text = qty + " audio discs ;"
             else:
                 qty_text = qty + " audio disc ;"
-
+        
             # format: $a FORMATS\QTY audio disc <space> <colon> $c 12 in.
             subfields_300 = [
                 Subfield("a", qty_text),
@@ -343,7 +347,7 @@ def add_discogs_data(base_record: Record, data: dict) -> Record:
             ]
             field_300 = Field(tag="300", indicators=[" ", " "], subfields=subfields_300)
             base_record.add_ordered_field(field_300)
-
+            
             # 340 ## physical medium
             subfields_340 = [Subfield("a", "vinyl"), Subfield("2", "rdamat")]
             field_340 = Field(tag="340", indicators=[" ", " "], subfields=subfields_340)
@@ -372,12 +376,12 @@ def add_discogs_data(base_record: Record, data: dict) -> Record:
             # translated to fixed field:
             base_record.add_ordered_field(Field(tag="007", data="sd fungnn|||eu"))
 
-            qty = data["full_json"]["formats"][0].get("qty", "1")
+            qty = full["formats"][0].get("qty", "1")
             if int(qty) > 1:
                 qty_text = qty + " audio discs :"
             else:
                 qty_text = qty + " audio disc :"
-
+        
             # format: $a FORMATS\QTY audio disc <space> <colon> $b digital <space> <semicolon> $c 4 3/4 in.
             subfields_300 = [
                 Subfield("a", qty_text),
@@ -386,27 +390,27 @@ def add_discogs_data(base_record: Record, data: dict) -> Record:
             ]
             field_300 = Field(tag="300", indicators=[" ", " "], subfields=subfields_300)
             base_record.add_ordered_field(field_300)
-
+            
             # 340 ## $b 4 3/4 in.
             subfields_340 = [Subfield("b", "4 3/4 in.")]
             field_340 = Field(tag="340", indicators=[" ", " "], subfields=subfields_340)
             base_record.add_ordered_field(field_340)
-
+        
             # 344 ## $a digital $2 rdatr
             subfields_344_1 = [Subfield("a", "digital"), Subfield("2", "rdatr")]
             field_344_1 = Field(tag="344", indicators=[" ", " "], subfields=subfields_344_1)
             base_record.add_ordered_field(field_344_1)
-
+        
             # 344 ## $b optical $2 rdarm
             subfields_344_2 = [Subfield("b", "optical"), Subfield("2", "rdarm")]
             field_344_2 = Field(tag="344", indicators=[" ", " "], subfields=subfields_344_2)
             base_record.add_ordered_field(field_344_2)
-
+        
             # 347 ## $a audio file $2 rdaft
             subfields_347_1 = [Subfield("a", "audio file"), Subfield("2", "rdaft")]
             field_347_1 = Field(tag="347", indicators=[" ", " "], subfields=subfields_347_1)
             base_record.add_ordered_field(field_347_1)
-
+        
             # 347 ## $b CD audio
             subfields_347_2 = [Subfield("b", "CD audio")]
             field_347_2 = Field(tag="347", indicators=[" ", " "], subfields=subfields_347_2)
