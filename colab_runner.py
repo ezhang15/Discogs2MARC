@@ -7,8 +7,7 @@ from discogs_cataloging_code_forColab import (
     create_discogs_record,
     create_marc_record,
 )
-from IPython.display import display, Markdown
-from google.colab import files
+from IPython.display import Markdown, FileLink, display
 
 
 def main():
@@ -42,8 +41,8 @@ def main():
         f.write(marc_buffer.getvalue())
 
     # --- Download link ---
-    display(Markdown("### Download MARC file"))
-    files.download(output_file)
+    display(FileLink(output_file))
+
 
 
 if __name__ == "__main__":
