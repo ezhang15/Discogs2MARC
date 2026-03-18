@@ -43,7 +43,7 @@ def main():
 
     # --- Download link ---
     display(FileLink(output_file))
-    files.download(output_file))
+    files.download(output_file)
 
 
 
