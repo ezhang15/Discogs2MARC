@@ -8,7 +8,6 @@ from discogs_cataloging_code_forColab import (
     create_marc_record,
 )
 from IPython.display import Markdown, FileLink, display
-from google.colab import files
 
 
 def main():
@@ -43,7 +42,6 @@ def main():
 
     # --- Download link ---
     display(FileLink(output_file))
-    files.download(output_file)
 
 
 
